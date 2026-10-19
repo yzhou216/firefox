@@ -128,6 +128,9 @@ disabled = "Top-level data: URI navigations are now always blocked (Bug 1895528)
 
 ["browser_hwconcurrency_popups_noopener.js"]
 
+["browser_letterboxing_scale_to_fit.js"]
+https_first_disabled = true
+
 ["browser_math.js"]
 
 ["browser_navigator.js"]

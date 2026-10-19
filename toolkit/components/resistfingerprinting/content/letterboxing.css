@@ -30,3 +30,35 @@
 :root:not([inDOMFullscreen]) .letterboxing.letterboxing-ready .browserContainer:not(.responsive-mode) > .browserStack:not(.exclude-letterboxing) {
   place-content: start center;
 }
+
+/*
+ * With privacy.resistFingerprinting.letterboxing.scaleToFit, the rounded
+ * browser is magnified uniformly until it reaches the edge of the available
+ * space along one axis, so that the margins remain along a single axis. The
+ * scale only affects how the remote browser is composited, so the page still
+ * sees the rounded viewport size and its usual device pixel ratio.
+ */
+@media -moz-pref("privacy.resistFingerprinting.letterboxing.scaleToFit") {
+  .letterboxing .browserContainer:not(.responsive-mode) > .browserStack:not(.exclude-letterboxing) {
+    /* Lets the browser measure the stack with container query units. */
+    container-type: size;
+
+    /*
+     * A browser in DOM fullscreen is stretched over the whole screen by
+     * ua.css instead of being rounded, so it must not be scaled.
+     */
+    > browser:not(:fullscreen) {
+      scale: min(100cqw / var(--letterboxing-width), 100cqh / var(--letterboxing-height));
+      transform-origin: 0 0;
+
+      &:dir(rtl) {
+        transform-origin: 100% 0;
+      }
+    }
+  }
+
+  /* Keeps the scaled browser centered, like the place-content rule above. */
+  :root:not([inDOMFullscreen]) .letterboxing.letterboxing-ready .browserContainer:not(.responsive-mode) > .browserStack:not(.exclude-letterboxing) > browser {
+    transform-origin: 50% 0;
+  }
+}
