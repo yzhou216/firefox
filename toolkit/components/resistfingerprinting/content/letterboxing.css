@@ -36,7 +36,9 @@
  * edge of the available space along one axis, so that the margins remain along
  * a single axis. The scale only affects how the remote browser is composited,
  * so the page still sees the rounded viewport size and its usual device pixel
- * ratio.
+ * ratio. APZ and BrowserParent compensate for the scale in scroll deltas,
+ * gesture thresholds and pointer moves, so that the page cannot measure it
+ * through input either.
  */
 .letterboxing .browserContainer:not(.responsive-mode) > .browserStack:not(.exclude-letterboxing) {
   /* Lets the browser measure the stack with container query units. */
@@ -44,10 +46,12 @@
 
   /*
    * A browser in DOM fullscreen is stretched over the whole screen by ua.css
-   * instead of being rounded, so it must not be scaled.
+   * instead of being rounded, so it must not be scaled. The browser is never
+   * shrunk either, since its size is out of date for a few frames while the
+   * window is resized, and APZ only compensates for magnification.
    */
   > browser:not(:fullscreen) {
-    scale: min(100cqw / var(--letterboxing-width), 100cqh / var(--letterboxing-height));
+    scale: max(1, min(100cqw / var(--letterboxing-width), 100cqh / var(--letterboxing-height)));
     transform-origin: 0 0;
 
     &:dir(rtl) {
