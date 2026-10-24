@@ -29,6 +29,7 @@
 #include "mozilla/RecursiveMutex.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/StaticPrefs_dom.h"
+#include "mozilla/StaticPrefs_privacy.h"
 #include "mozilla/TextEventDispatcher.h"
 #include "mozilla/TextEvents.h"
 #include "mozilla/TouchEvents.h"
@@ -1455,7 +1456,38 @@ void BrowserParent::SendRealMouseEvent(WidgetMouseEvent& aMouseOrPointerEvent) {
     }
   }
 
+  const LayoutDeviceIntPoint parentPoint = aMouseOrPointerEvent.mRefPoint;
   aMouseOrPointerEvent.mRefPoint = TransformParentToChild(aMouseOrPointerEvent);
+  if (StaticPrefs::privacy_resistFingerprinting_letterboxing() &&
+      aMouseOrPointerEvent.mMovement &&
+      *aMouseOrPointerEvent.mMovement != LayoutDeviceIntPoint(0, 0)) {
+    // While the pointer is locked, the platform can supply how far it moved in
+    // unscaled pixels. Web content also sees positions with the scale that
+    // letterboxing applies (see below) around the moments when the pointer
+    // gets locked and unlocked, since the BrowserChild does that independently
+    // of this process. So scale the movement like the positions, and carry
+    // what rounding leaves over to the next move. Otherwise web content could
+    // compare the two, or find the scale in a pattern of the distances.
+    const LayoutDevicePoint origin(parentPoint);
+    const LayoutDevicePoint movement(*aMouseOrPointerEvent.mMovement);
+    const LayoutDevicePoint scaled = TransformParentToChild(origin + movement) -
+                                     TransformParentToChild(origin) +
+                                     mMovementRemainder;
+    const LayoutDeviceIntPoint rounded = RoundedToInt(scaled);
+    mMovementRemainder = scaled - LayoutDevicePoint(rounded);
+    aMouseOrPointerEvent.mMovement = Some(rounded);
+    if (rounded == LayoutDeviceIntPoint(0, 0)) {
+      // Web content never sees a move without movement while the pointer is
+      // locked, but the BrowserChild still needs the position (see
+      // EventStateManager::ResetPointerToWindowCenterWhilePointerLocked()).
+      aMouseOrPointerEvent.mFlags.mOnlySystemGroupDispatch = true;
+    }
+  }
+
+  if (eMouseEnterIntoWidget == aMouseOrPointerEvent.mMessage ||
+      eMouseExitFromWidget == aMouseOrPointerEvent.mMessage) {
+    mLastRealMouseMove.reset();
+  }
 
   if (const nsCOMPtr<nsIWidget> widget = GetWidget()) {
     // When we mouseenter the remote target, the remote target's cursor should
@@ -1538,6 +1570,13 @@ void BrowserParent::SendRealMouseEvent(WidgetMouseEvent& aMouseOrPointerEvent) {
 
   if (eMouseMove == aMouseOrPointerEvent.mMessage) {
     if (aMouseOrPointerEvent.mReason == WidgetMouseEvent::eSynthesized) {
+      if (mLastRealMouseMove) {
+        // The content sees the pointer where the synthesized move puts it, for
+        // example after the browser was rescaled, so compare the next real
+        // move with that point (see below).
+        mLastRealMouseMove->mParentPoint = parentPoint;
+        mLastRealMouseMove->mChildPoint = aMouseOrPointerEvent.mRefPoint;
+      }
       DebugOnly<bool> ret =
           isInputPriorityEventEnabled
               ? SendSynthMouseMoveEvent(aMouseOrPointerEvent, guid, blockId)
@@ -1546,6 +1585,36 @@ void BrowserParent::SendRealMouseEvent(WidgetMouseEvent& aMouseOrPointerEvent) {
       NS_WARNING_ASSERTION(ret, "SendSynthMouseMoveEvent() failed");
       MOZ_ASSERT(!ret || aMouseOrPointerEvent.HasBeenPostedToRemoteProcess());
       return;
+    }
+
+    // Letterboxing magnifies the browser, so that moving the pointer by one
+    // pixel moves it by less than one pixel in the content, and some moves
+    // don't change its position in the content at all. Such moves never happen
+    // without the magnification, so they would reveal it to web content, and
+    // with it the real size of the content area. Moves with platform movement
+    // data are left alone, since that data is scaled above.
+    if (StaticPrefs::privacy_resistFingerprinting_letterboxing() &&
+        !aMouseOrPointerEvent.mMovement) {
+      const LastRealMouseMove move{parentPoint,
+                                   aMouseOrPointerEvent.mRefPoint,
+                                   aMouseOrPointerEvent.mButtons,
+                                   aMouseOrPointerEvent.mModifiers,
+                                   aMouseOrPointerEvent.pointerId,
+                                   aMouseOrPointerEvent.mInputSource};
+      if (mLastRealMouseMove &&
+          mLastRealMouseMove->mParentPoint != move.mParentPoint &&
+          mLastRealMouseMove->mChildPoint == move.mChildPoint &&
+          mLastRealMouseMove->mButtons == move.mButtons &&
+          mLastRealMouseMove->mModifiers == move.mModifiers &&
+          mLastRealMouseMove->mPointerId == move.mPointerId &&
+          mLastRealMouseMove->mInputSource == move.mInputSource) {
+        // Keep the parent point up to date, so that a repeated move to the
+        // same parent point is still sent, as it would be without the
+        // magnification.
+        mLastRealMouseMove->mParentPoint = move.mParentPoint;
+        return;
+      }
+      mLastRealMouseMove = Some(move);
     }
 
     // Don't compress mousemove events:
@@ -2648,14 +2717,29 @@ LayoutDeviceIntPoint BrowserParent::TransformParentToChild(
     const LayoutDeviceIntPoint& aPoint) {
   LayoutDeviceToLayoutDeviceMatrix4x4 matrix =
       GetChildToParentConversionMatrix();
-  if (!matrix.Invert()) {
+
+  // The matrix of an out-of-process iframe includes the transform of the
+  // top-level browser, which letterboxing magnifies, and transforms that the
+  // page controls. Web content in the top-level browser only sees positions in
+  // whole pixels, but the iframe could see the position before rounding if the
+  // page scales the iframe down. So round to a position in the top-level
+  // browser first, as for web content there. For everything else this step is
+  // the identity.
+  LayoutDeviceToLayoutDeviceMatrix4x4 topToParent;
+  if (StaticPrefs::privacy_resistFingerprinting_letterboxing() &&
+      GetBrowserBridgeParent()) {
+    topToParent = TopLevelBrowserParent()->GetChildToParentConversionMatrix();
+  }
+  LayoutDeviceToLayoutDeviceMatrix4x4 parentToTop = topToParent;
+
+  if (!matrix.Invert() || !parentToTop.Invert()) {
     return LayoutDeviceIntPoint();
   }
-  auto transformed = UntransformBy(matrix, aPoint);
-  if (!transformed) {
-    return LayoutDeviceIntPoint();
-  }
-  return transformed.ref();
+  const auto topPoint = UntransformBy(parentToTop, aPoint);
+  const auto transformed =
+      topPoint ? UntransformBy(topToParent * matrix, topPoint.ref())
+               : Nothing();
+  return transformed.valueOr(LayoutDeviceIntPoint());
 }
 
 LayoutDevicePoint BrowserParent::TransformParentToChild(

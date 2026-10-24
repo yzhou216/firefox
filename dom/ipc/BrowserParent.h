@@ -972,6 +972,23 @@ class BrowserParent final : public PBrowserParent,
 
   nsTArray<nsString> mVerifyDropLinks;
 
+  // The last real mouse move that SendRealMouseEvent() sent to the
+  // BrowserChild, used to drop moves that letterboxing turns into moves by
+  // zero pixels. Synthesized moves update the points.
+  struct LastRealMouseMove {
+    LayoutDeviceIntPoint mParentPoint;
+    LayoutDeviceIntPoint mChildPoint;
+    int16_t mButtons;
+    Modifiers mModifiers;
+    uint32_t mPointerId;
+    uint16_t mInputSource;
+  };
+  Maybe<LastRealMouseMove> mLastRealMouseMove;
+
+  // The part of the movement that the platform supplied that rounding left
+  // over, in pixels of the BrowserChild (see SendRealMouseEvent()).
+  LayoutDevicePoint mMovementRemainder;
+
 #ifdef DEBUG
   int32_t mActiveSuppressDisplayportCount = 0;
 #endif
