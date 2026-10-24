@@ -947,7 +947,10 @@ bool AsyncPanZoomController::IsDestroyed() const {
 
 float AsyncPanZoomController::GetDPI() const {
   if (APZCTreeManager* localPtr = mTreeManager) {
-    return localPtr->GetDPI();
+    // Physical thresholds such as the touch slop are compared with screen
+    // distances, so they need to grow with the presentation scale to stay the
+    // same in the content's own pixels.
+    return localPtr->GetDPI() * GetPresentationScale();
   }
   // If this APZC has been destroyed then this value is not going to be
   // used for anything that the user will end up seeing, so we can just
@@ -2105,8 +2108,11 @@ ParentLayerPoint AsyncPanZoomController::GetScrollWheelDelta(
       break;
     }
     case ScrollWheelInput::SCROLLDELTA_PIXEL: {
+      // Web content receives the unscaled delta, so it must also scroll by the
+      // unscaled delta. See GetPresentationScale().
       delta = ToParentLayerCoordinates(ScreenPoint(aDeltaX, aDeltaY),
-                                       aEvent.mOrigin);
+                                       aEvent.mOrigin) *
+              GetPresentationScale();
       break;
     }
   }
@@ -2948,6 +2954,12 @@ AsyncPanZoomController::GetDisplacementsForPanGesture(
                    StaticPrefs::apz_touch_acceleration_factor_y()) /
           absVelocity;
     }
+  } else {
+    // Web content receives the unscaled displacement in wheel events, so
+    // scroll by that, and compare it with thresholds like the axis lock one as
+    // if it were magnified like a screen distance. See GetPresentationScale().
+    logicalPanDisplacement = logicalPanDisplacement * GetPresentationScale();
+    physicalPanDisplacement = physicalPanDisplacement * GetPresentationScale();
   }
 
   MOZ_ASSERT(GetCurrentPanGestureBlock());
@@ -3772,7 +3784,9 @@ void AsyncPanZoomController::HandlePinchLocking(
   //       their un-buffered counterparts if there is only one (the latest)
   //       event in the buffer. ie: when the touch screen is dispatching
   //       events slower than the lifetime of the buffer
-  ParentLayerCoord bufferedSpanDistance;
+  // Spans are in screen coordinates already, since
+  // PinchGestureInput::TransformToLocal() doesn't transform them.
+  ScreenCoord spanDistance;
   ParentLayerPoint focusPoint, bufferedFocusChange;
   {
     RecursiveMutexAutoLock lock(mRecursiveMutex);
@@ -3786,14 +3800,11 @@ void AsyncPanZoomController::HandlePinchLocking(
             : mLastZoomFocus;
 
     bufferedFocusChange = bufferedLastZoomFocus - focusPoint;
-    bufferedSpanDistance = fabsf(mPinchEventBuffer.front().mPreviousSpan -
-                                 mPinchEventBuffer.back().mCurrentSpan);
+    spanDistance = fabsf(mPinchEventBuffer.front().mPreviousSpan -
+                         mPinchEventBuffer.back().mCurrentSpan);
   }
 
   // Convert to screen coordinates
-  ScreenCoord spanDistance =
-      ToScreenCoordinates(ParentLayerPoint(0, bufferedSpanDistance), focusPoint)
-          .Length();
   ScreenPoint focusChange =
       ToScreenCoordinates(bufferedFocusChange, focusPoint);
 
@@ -3929,8 +3940,12 @@ bool AsyncPanZoomController::AttemptScroll(
           // this will be insufficient.
           RecursiveMutexAutoUnlock unlock(mRecursiveMutex);
 
+          // The presentation scale magnifies the displacement on the screen,
+          // but not the scrolling that the page sees, so leave it out. See
+          // GetPresentationScale().
           ScreenIntPoint screenDisplacement = RoundedToInt(
-              ToScreenCoordinates(adjustedDisplacement, aStartPoint));
+              ToScreenCoordinates(adjustedDisplacement, aStartPoint) /
+              GetPresentationScale());
           // If the displacement we just applied rounds to zero in screen space,
           // then it's probably not going to be visible to the user. In that
           // case let's not mark this APZC as scrolled, so that even if the

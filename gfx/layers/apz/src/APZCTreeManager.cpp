@@ -24,6 +24,7 @@
 #include "WRHitTester.h"             // for WRHitTester
 #include "apz/src/APZUtils.h"
 #include "mozilla/EventStateManager.h"  // for WheelPrefs
+#include "mozilla/FloatingPoint.h"      // for FuzzyEqualsMultiplicative
 #include "mozilla/MouseEvents.h"
 #include "mozilla/MozPromise.h"
 #include "mozilla/Preferences.h"  // for Preferences
@@ -31,6 +32,7 @@
 #include "mozilla/StaticPrefs_accessibility.h"
 #include "mozilla/StaticPrefs_apz.h"
 #include "mozilla/StaticPrefs_layout.h"
+#include "mozilla/StaticPrefs_privacy.h"
 #include "mozilla/ToString.h"
 #include "mozilla/TouchEvents.h"
 #include "mozilla/dom/BrowserParent.h"  // for AreRecordReplayTabsActive
@@ -788,6 +790,7 @@ std::vector<LayersId> APZCTreeManager::UpdateHitTestingTree(
   }
 
   SetFixedLayerMarginsOnRootContentApzcs(lock);
+  UpdatePresentationScales(lock);
 
   APZCTM_LOG("APZCTreeManager (%p)\n", this);
   if (mRootNode && MOZ_LOG_TEST(sLog, LogLevel::Debug)) {
@@ -4001,6 +4004,63 @@ void APZCTreeManager::SetFixedLayerMarginsOnRootContentApzcs(
   for (auto* apzc : mRootContentApzcs) {
     apzc->SetFixedLayerMargins(margins);
   }
+}
+
+void APZCTreeManager::UpdatePresentationScales(
+    const RecursiveMutexAutoLock& aProofOfTreeLock) {
+  // Other scales of the <browser> element, such as the zoom of responsive
+  // design mode, are not the magnification of letterboxing.
+  const bool letterboxing =
+      StaticPrefs::privacy_resistFingerprinting_letterboxing();
+  if (!letterboxing && !mHavePresentationScales) {
+    return;
+  }
+
+  // Letterboxing magnifies the <browser> element of the chrome document with a
+  // CSS scale, which is part of the ancestor transform of the root content
+  // APZC of the content that the element embeds. Only the chrome document can
+  // transform the root content APZC, unlike other APZCs of the content, such as
+  // those of fixed-position scrollers, whose ancestor transforms can include
+  // transforms of the page. So take the scale from the root content APZC, and
+  // apply it to everything in that content, including out-of-process iframes.
+  std::unordered_map<LayersId, float, LayersId::HashFn> scales;
+  for (const AsyncPanZoomController* apzc : mRootContentApzcs) {
+    gfx::Matrix transform;
+    // With letterboxing off, this pass only resets the scales that were set.
+    if (!letterboxing || apzc->GetLayersId() == mRootLayersId ||
+        !apzc->GetAncestorTransform().Is2D(&transform) ||
+        transform.HasNonAxisAlignedTransform()) {
+      continue;
+    }
+    gfx::MatrixScales factors = transform.ScaleFactors();
+    // Letterboxing only ever magnifies, and does so uniformly.
+    if (factors.xScale > 1.0f &&
+        FuzzyEqualsMultiplicative(factors.xScale, factors.yScale)) {
+      scales[apzc->GetLayersId()] = factors.xScale;
+    }
+  }
+
+  bool haveScales = false;
+  ForEachNode<ReverseIterator>(mRootNode.get(), [&](HitTestingTreeNode* aNode) {
+    AsyncPanZoomController* apzc = aNode->GetApzc();
+    if (!apzc || !aNode->IsPrimaryHolder()) {
+      return;
+    }
+    // The content that the APZC belongs to is the outermost one below the
+    // chrome document. The chrome document itself is never in the map.
+    LayersId contentLayersId = mRootLayersId;
+    for (const HitTestingTreeNode* node = aNode; node;
+         node = node->GetParent()) {
+      if (node->GetLayersId() != mRootLayersId) {
+        contentLayersId = node->GetLayersId();
+      }
+    }
+    const auto it = scales.find(contentLayersId);
+    const float scale = it != scales.end() ? it->second : 1.0f;
+    haveScales = haveScales || scale != 1.0f;
+    apzc->SetPresentationScale(scale);
+  });
+  mHavePresentationScales = haveScales;
 }
 
 ScreenPoint APZCTreeManager::ComputeFixedMarginsOffset(

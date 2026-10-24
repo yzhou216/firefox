@@ -52,8 +52,12 @@ bool AutoscrollAnimation::DoSample(FrameMetrics& aFrameMetrics,
 
   ScreenPoint mouseLocation = treeManager->GetCurrentMousePosition();
 
-  // Get the dpi so accelerate can scale to screen dpi.
-  const auto widgetScale = treeManager->GetWidgetScale();
+  // Get the dpi so accelerate can scale to screen dpi. Web content sees the
+  // distance from the anchor in its own pixels, so the speed must not depend
+  // on the presentation scale either. See
+  // AsyncPanZoomController::GetPresentationScale().
+  const CSSToLayoutDeviceScale widgetScale(treeManager->GetWidgetScale().scale *
+                                           mApzc.GetPresentationScale());
 
   // The implementation of this function closely mirrors that of its main-
   // thread equivalent, the autoscrollLoop() function in

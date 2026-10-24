@@ -18531,6 +18531,20 @@
   value: "Warn"
   mirror: never
 
+# Whether letterboxing is enabled, which RFPHelper.sys.mjs applies. While it is,
+# letterboxing magnifies the rounded content area until it reaches the edge of
+# the available space along one axis (see letterboxing.css). The page must not
+# be able to measure the magnification, since it reveals the real size of the
+# content area, so APZ measures scroll deltas and gesture thresholds in unscaled
+# pixels, and BrowserParent drops pointer moves that the magnification turns
+# into moves by zero pixels. Code that cannot use the front end needs this pref
+# to tell that magnification from the other CSS transforms of a browser, such as
+# the zoom of responsive design mode.
+- name: privacy.resistFingerprinting.letterboxing
+  type: RelaxedAtomicBool
+  value: false
+  mirror: always
+
 # Enable jittering the clock one precision value forward.
 - name: privacy.resistFingerprinting.reduceTimerPrecision.jitter
   type: RelaxedAtomicBool

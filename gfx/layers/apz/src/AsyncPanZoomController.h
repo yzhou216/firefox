@@ -5,6 +5,7 @@
 #ifndef mozilla_layers_AsyncPanZoomController_h
 #define mozilla_layers_AsyncPanZoomController_h
 
+#include <atomic>
 #include <iosfwd>
 
 #include "APZUtils.h"
@@ -196,7 +197,9 @@ class AsyncPanZoomController {
   };
 
   /**
-   * Gets the DPI from the tree manager.
+   * Gets the DPI from the tree manager, multiplied by the presentation scale
+   * (see GetPresentationScale()), since it is used to convert physical
+   * thresholds into screen pixels.
    */
   float GetDPI() const;
 
@@ -1898,6 +1901,16 @@ class AsyncPanZoomController {
     return mAncestorTransform.GetPerspectiveTransform();
   }
 
+  /**
+   * Returns the scale by which letterboxing magnifies the top-level content
+   * that this APZC belongs to, or 1. Scroll deltas and physical thresholds are
+   * multiplied by this scale, so that they behave as if the content were not
+   * magnified, and web content cannot measure the magnification.
+   */
+  float GetPresentationScale() const { return mPresentationScale; }
+
+  void SetPresentationScale(float aScale) { mPresentationScale = aScale; }
+
   // Returns whether or not this apzc contains the given screen point within
   // its composition bounds.
   bool Contains(const ScreenIntPoint& aPoint) const;
@@ -1943,6 +1956,10 @@ class AsyncPanZoomController {
    * including) the parent APZC down to (but excluding) this one, and excluding
    * any perspective transforms. */
   AncestorTransform mAncestorTransform;
+
+  /* See GetPresentationScale(). Set on the updater thread, and read on the
+   * controller and sampler threads. */
+  std::atomic<float> mPresentationScale{1.0f};
 
   /* ===================================================================
    * The functions and members in this section are used for testing

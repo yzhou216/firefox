@@ -361,8 +361,12 @@ nsEventStatus GestureEventListener::HandleInputTouchMove() {
 
       mSpanChange += fabsf(currentSpan - mPreviousSpan);
       mFocusChange += (currentFocus - mPreviousFocus).Length();
-      if (mSpanChange > PINCH_START_THRESHOLD ||
-          mFocusChange > PINCH_START_THRESHOLD) {
+      // The threshold is in screen pixels, so it needs to grow with the
+      // presentation scale to stay the same in the content's own pixels. See
+      // AsyncPanZoomController::GetPresentationScale().
+      const float threshold = PINCH_START_THRESHOLD *
+                              mAsyncPanZoomController->GetPresentationScale();
+      if (mSpanChange > threshold || mFocusChange > threshold) {
         SetState(GESTURE_PINCH);
         PinchGestureInput pinchEvent(
             PinchGestureInput::PINCHGESTURE_START, PinchGestureInput::TOUCH,

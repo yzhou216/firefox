@@ -17,6 +17,13 @@ XPCOMUtils.defineLazyPreferenceGetter(
   100
 );
 
+XPCOMUtils.defineLazyPreferenceGetter(
+  lazy,
+  "letterboxing",
+  "privacy.resistFingerprinting.letterboxing",
+  false
+);
+
 export class AutoScrollChild extends JSWindowActorChild {
   constructor() {
     super();
@@ -25,8 +32,9 @@ export class AutoScrollChild extends JSWindowActorChild {
     this._scrolldir = "";
     this._startX = null;
     this._startY = null;
-    this._screenX = null;
-    this._screenY = null;
+    this._pointerX = null;
+    this._pointerY = null;
+    this._usesClientPosition = false;
     this._lastFrame = null;
     this._autoscrollHandledByApz = false;
     this._scrollId = null;
@@ -224,10 +232,13 @@ export class AutoScrollChild extends JSWindowActorChild {
     // below, so the two are not ordered. Observe before asking, otherwise a
     // rejection that wins the race is dropped and nothing scrolls at all.
     // And before beginning observation, we have to initialize the coordinates.
-    this._startX = event.screenX;
-    this._startY = event.screenY;
-    this._screenX = event.screenX;
-    this._screenY = event.screenY;
+    this._usesClientPosition = lazy.letterboxing;
+    [this._startX, this._startY] = this.getPointerPosition(event) ?? [
+      null,
+      null,
+    ];
+    this._pointerX = this._startX;
+    this._pointerY = this._startY;
     this._scrollErrorX = 0;
     this._scrollErrorY = 0;
     this._autoscrollHandledByApz = true;
@@ -310,6 +321,21 @@ export class AutoScrollChild extends JSWindowActorChild {
     }
   }
 
+  // Returns the position of the pointer that the speed of autoscrolling
+  // depends on, or null if the event doesn't have it. Letterboxing magnifies
+  // the browser, and web content sees how far the pointer moves in its own
+  // pixels, so use those then. Otherwise the page could learn the magnification
+  // from the speed. The choice is made when autoscrolling starts, so that the
+  // positions stay comparable if the pref changes meanwhile.
+  getPointerPosition(event) {
+    if (!this._usesClientPosition) {
+      return [event.screenX, event.screenY];
+    }
+    // An event that another process sends to start autoscrolling only has
+    // screen coordinates.
+    return event.clientX === undefined ? null : [event.clientX, event.clientY];
+  }
+
   accelerate(curr, start) {
     // `speed` is the divisor in `val` below, so a higher multiplier must make
     // `speed` smaller to produce a faster autoscroll. The multiplier is a
@@ -354,13 +380,13 @@ export class AutoScrollChild extends JSWindowActorChild {
     // don't bother scrolling vertically when the scrolldir is only horizontal
     // and the other way around
     if (this._scrolldir != "EW") {
-      var y = this.accelerate(this._screenY, this._startY) * timeCompensation;
+      var y = this.accelerate(this._pointerY, this._startY) * timeCompensation;
       var desiredScrollY = this._scrollErrorY + y;
       actualScrollY = this.roundToZero(desiredScrollY);
       this._scrollErrorY = desiredScrollY - actualScrollY;
     }
     if (this._scrolldir != "NS") {
-      var x = this.accelerate(this._screenX, this._startX) * timeCompensation;
+      var x = this.accelerate(this._pointerX, this._startX) * timeCompensation;
       var desiredScrollX = this._scrollErrorX + x;
       actualScrollX = this.roundToZero(desiredScrollX);
       this._scrollErrorX = desiredScrollX - actualScrollX;
@@ -405,10 +431,19 @@ export class AutoScrollChild extends JSWindowActorChild {
 
   handleEvent(event) {
     switch (event.type) {
-      case "mousemove":
-        this._screenX = event.screenX;
-        this._screenY = event.screenY;
+      case "mousemove": {
+        let position = this.getPointerPosition(event);
+        if (!position) {
+          break;
+        }
+        [this._pointerX, this._pointerY] = position;
+        // Autoscrolling that another process started has no anchor yet, so it
+        // is where the pointer first moves to.
+        if (this._startX === null) {
+          [this._startX, this._startY] = position;
+        }
         break;
+      }
       case "mousedown":
         if (
           this.canStartAutoScrollWith(event) &&
