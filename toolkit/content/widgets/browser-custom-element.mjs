@@ -1519,12 +1519,22 @@ export class MozBrowser extends MozElements.MozElementMixin(XULFrameElement) {
           var x = aEvent.screenX - this._startX;
           var y = aEvent.screenY - this._startY;
 
-          if (
-            x > this._AUTOSCROLL_SNAP ||
-            x < -this._AUTOSCROLL_SNAP ||
-            y > this._AUTOSCROLL_SNAP ||
-            y < -this._AUTOSCROLL_SNAP
-          ) {
+          // Letterboxing magnifies the browser, and web content sees how far
+          // the pointer moves in its own pixels, so magnify the distance after
+          // which a click ends autoscrolling too. Otherwise the page could
+          // learn the magnification from that distance. Layout is only read
+          // here, since flushing it while the autoscroller opens changes the
+          // order of the events that follow.
+          const letterboxing = this.mPrefs.getBoolPref(
+            "privacy.resistFingerprinting.letterboxing",
+            false
+          );
+          const scale =
+            letterboxing && this.clientWidth
+              ? this.getBoundingClientRect().width / this.clientWidth
+              : 1;
+          const snap = this._AUTOSCROLL_SNAP * Math.max(1, scale);
+          if (x > snap || x < -snap || y > snap || y < -snap) {
             this._ignoreMouseEvents = false;
           }
           break;

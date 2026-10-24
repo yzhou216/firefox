@@ -569,6 +569,11 @@ class APZCTreeManager : public IAPZCTreeManager, public APZBridge {
   void SetFixedLayerMarginsOnRootContentApzcs(
       const RecursiveMutexAutoLock& aProofOfTreeLock) MOZ_REQUIRES(mTreeLock);
 
+  // Sets the presentation scale of every APZC, see
+  // AsyncPanZoomController::GetPresentationScale().
+  void UpdatePresentationScales(const RecursiveMutexAutoLock& aProofOfTreeLock)
+      MOZ_REQUIRES(mTreeLock);
+
  public:
   // Public hook for gtests subclass
   virtual SampleTime GetFrameTime();
@@ -1188,6 +1193,10 @@ class APZCTreeManager : public IAPZCTreeManager, public APZBridge {
 
   // An array of root content APZCs in this tree.
   nsTArray<AsyncPanZoomController*> mRootContentApzcs MOZ_GUARDED_BY(mTreeLock);
+
+  // Whether any APZC has a presentation scale other than 1, see
+  // UpdatePresentationScales().
+  bool mHavePresentationScales MOZ_GUARDED_BY(mTreeLock) = false;
 
   // NOTE: This ScrollGenerationCounter needs to be per APZCTreeManager since
   // the generation is bumped up on the sampler theread which is per

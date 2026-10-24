@@ -9,6 +9,7 @@
 #include "UnitTransforms.h"
 #include "mozilla/MouseEvents.h"
 #include "mozilla/StaticPrefs_dom.h"
+#include "mozilla/StaticPrefs_privacy.h"
 #include "mozilla/SwipeTracker.h"
 #include "mozilla/TextEvents.h"
 #include "mozilla/TouchEvents.h"
@@ -375,6 +376,13 @@ bool MouseInput::TransformToLocal(
     return false;
   }
   mLocalOrigin = *point;
+  if (StaticPrefs::privacy_resistFingerprinting_letterboxing()) {
+    // Letterboxing magnifies the browser, which puts the pointer between
+    // ParentLayer pixels. Round it like touch points, so that for example
+    // dragging a scrollbar thumb moves the scroll position in the same steps
+    // as without the magnification.
+    mLocalOrigin = ParentLayerPoint(RoundedToInt(*point));
+  }
 
   return true;
 }
