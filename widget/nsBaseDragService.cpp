@@ -17,6 +17,7 @@
 #include "mozilla/PresShell.h"
 #include "mozilla/ProfilerLabels.h"
 #include "mozilla/SVGImageContext.h"
+#include "mozilla/StaticPrefs_privacy.h"
 #include "mozilla/TextControlElement.h"
 #include "mozilla/ViewportUtils.h"
 #include "mozilla/dom/BindingDeclarations.h"
@@ -880,7 +881,20 @@ nsBaseDragSession::FireDragEventAtSource(EventMessage aEventMessage,
   if (aEventMessage == eDragEnd) {
     event.mRefPoint = mEndDragPoint;
     if (widget) {
-      event.mRefPoint -= widget->WidgetToTopLevelWidgetOffset();
+      // Letterboxing magnifies a remote browser, so undo the whole transform
+      // of the widget then, as for drop events, rather than only its offset.
+      // Otherwise web content could compare the positions of the dragend and
+      // drop events to learn the magnification.
+      const Maybe<LayoutDeviceToLayoutDeviceMatrix4x4> toWidget =
+          StaticPrefs::privacy_resistFingerprinting_letterboxing()
+              ? widget->WidgetToTopLevelWidgetTransform().MaybeInverse()
+              : Nothing();
+      if (toWidget) {
+        event.mRefPoint = RoundedToInt(
+            toWidget->TransformPoint(LayoutDevicePoint(mEndDragPoint)));
+      } else {
+        event.mRefPoint -= widget->WidgetToTopLevelWidgetOffset();
+      }
     }
     event.mUserCancelled = mUserCancelled;
   }
