@@ -1,0 +1,8 @@
+{
+  "name": "firefox-build",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+  "features": {
+    "ghcr.io/devcontainers/features/sshd:1": { "version": "latest" }
+  },
+  "hostRequirements": { "cpus": 4, "memory": "16gb", "storage": "32gb" }
+}
